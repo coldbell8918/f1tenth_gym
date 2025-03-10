@@ -13,32 +13,24 @@ from pyglet.gl import GL_POINTS
 Planner Helpers
 """
 @njit(fastmath=False, cache=True)
+
+#  현재 차량의 위치에서 waypoint 상의 가장 가까운 점을 찾는 기능
 def nearest_point_on_trajectory(point, trajectory):
-    """
-    Return the nearest point along the given piecewise linear trajectory.
-
-    Same as nearest_point_on_line_segment, but vectorized. This method is quite fast, time constraints should
-    not be an issue so long as trajectories are not insanely long.
-
-        Order of magnitude: trajectory length: 1000 --> 0.0002 second computation (5000fps)
-
-    point: size 2 numpy array
-    trajectory: Nx2 matrix of (x,y) trajectory waypoints
-        - these must be unique. If they are not unique, a divide by 0 error will destroy the world
-    """
+   
     diffs = trajectory[1:,:] - trajectory[:-1,:]
-    l2s   = diffs[:,0]**2 + diffs[:,1]**2
-    # this is equivalent to the elementwise dot product
-    # dots = np.sum((point - trajectory[:-1,:]) * diffs[:,:], axis=1)
+    l2s   = diffs[:,0]**2 + diffs[:,1]**2 
+    
     dots = np.empty((trajectory.shape[0]-1, ))
     for i in range(dots.shape[0]):
         dots[i] = np.dot((point - trajectory[i, :]), diffs[i, :])
+
     t = dots / l2s
+    
     t[t<0.0] = 0.0
     t[t>1.0] = 1.0
-    # t = np.clip(dots / l2s, 0.0, 1.0)
-    projections = trajectory[:-1,:] + (t*diffs.T).T
-    # dists = np.linalg.norm(point - projections, axis=1)
+   
+    projections = trajectory[:-1,:] + (t*diffs.T).T 
+    
     dists = np.empty((projections.shape[0],))
     for i in range(dists.shape[0]):
         temp = point - projections[i]
@@ -135,6 +127,7 @@ def get_actuation(pose_theta, lookahead_point, position, lookahead_distance, whe
     """
     Returns actuation
     """
+
     waypoint_y = np.dot(np.array([np.sin(-pose_theta), np.cos(-pose_theta)]), lookahead_point[0:2]-position)
     speed = lookahead_point[2]
     if np.abs(waypoint_y) < 1e-6:
@@ -184,12 +177,14 @@ class PurePursuitPlanner:
         """
         gets the current waypoint to follow
         """
-        wpts = np.vstack((self.waypoints[:, self.conf.wpt_xind], self.waypoints[:, self.conf.wpt_yind])).T
-        nearest_point, nearest_dist, t, i = nearest_point_on_trajectory(position, wpts)
+        wpts = np.vstack((self.waypoints[:, self.conf.wpt_xind], self.waypoints[:, self.conf.wpt_yind])).T # waypoint의 x,y 좌표만 가져오기
+        nearest_point, nearest_dist, t, i = nearest_point_on_trajectory(position, wpts) # 현재 차량에서 가장 가까운 waypoint를 찾음
         if nearest_dist < lookahead_distance:
-            lookahead_point, i2, t2 = first_point_on_trajectory_intersecting_circle(position, lookahead_distance, wpts, i+t, wrap=True)
+            lookahead_point, i2, t2 = first_point_on_trajectory_intersecting_circle(position, lookahead_distance, wpts, i+t, wrap=True) # lookahead distance 이내에 있는 웨이 포인트를 찾음
+            
             if i2 == None:
                 return None
+            
             current_waypoint = np.empty((3, ))
             # x, y
             current_waypoint[0:2] = wpts[i2, :]
@@ -197,7 +192,7 @@ class PurePursuitPlanner:
             current_waypoint[2] = waypoints[i, self.conf.wpt_vind]
             return current_waypoint
         elif nearest_dist < self.max_reacquire:
-            return np.append(wpts[i, :], waypoints[i, self.conf.wpt_vind])
+            return np.append(wpts[i, :], waypoints[i, self.conf.wpt_vind]) # Waypoint 반환 및 경로 다시 탐색
         else:
             return None
 
@@ -205,12 +200,13 @@ class PurePursuitPlanner:
         """
         gives actuation given observation
         """
-        position = np.array([pose_x, pose_y])
-        lookahead_point = self._get_current_waypoint(self.waypoints, lookahead_distance, position, pose_theta)
+        position = np.array([pose_x, pose_y]) # 현재 차량의 위치
+        lookahead_point = self._get_current_waypoint(self.waypoints, lookahead_distance, position, pose_theta) # lookahead distance만큼 떨어진 경로 상의 waypoint
 
         if lookahead_point is None:
             return 4.0, 0.0
 
+        # 차량의 방향과 lookahead point의 위치를 통해 조향 각을 계산
         speed, steering_angle = get_actuation(pose_theta, lookahead_point, position, lookahead_distance, self.wheelbase)
         speed = vgain * speed
 
@@ -245,12 +241,13 @@ def main():
 
     work = {'mass': 3.463388126201571, 'lf': 0.15597534362552312, 'tlad': 0.82461887897713965, 'vgain': 1.375}#0.90338203837889}
     
-    with open('config_example_map.yaml') as file:
+    with open('pure_pursuit.yaml') as file:
         conf_dict = yaml.load(file, Loader=yaml.FullLoader)
     conf = Namespace(**conf_dict)
 
-    planner = PurePursuitPlanner(conf, (0.17145+0.15875)) #FlippyPlanner(speed=0.2, flip_every=1, steer=10)
+    planner = PurePursuitPlanner(conf, (0.17145+0.15875)) # FlippyPlanner(speed=0.2, flip_every=1, steer=10)
 
+    # Simulation에서 차량을 따라가는 카메라 기능을 구현 및 경로를 시각적으로 rendering
     def render_callback(env_renderer):
         # custom extra drawing function
 
@@ -273,15 +270,17 @@ def main():
     env.add_render_callback(render_callback)
     
     obs, step_reward, done, info = env.reset(np.array([[conf.sx, conf.sy, conf.stheta]]))
+    
     env.render()
 
     laptime = 0.0
     start = time.time()
 
     while not done:
-        speed, steer = planner.plan(obs['poses_x'][0], obs['poses_y'][0], obs['poses_theta'][0], work['tlad'], work['vgain'])
+        speed, steer = planner.plan(obs['poses_x'][0], obs['poses_y'][0], obs['poses_theta'][0], work['tlad'], work['vgain']) # tlad: lookahead sitance, vgain: 속도 조정 계수
         obs, step_reward, done, info = env.step(np.array([[steer, speed]]))
         laptime += step_reward
+        
         env.render(mode='human')
         
     print('Sim elapsed time:', laptime, 'Real elapsed time:', time.time()-start)
